@@ -1,10 +1,10 @@
-spanner-truncate
+spanner-deleter
 ===
-[![CircleCI](https://circleci.com/gh/cloudspannerecosystem/spanner-truncate.svg?style=svg)](https://circleci.com/gh/cloudspannerecosystem/spanner-truncate)
+[![CircleCI](https://circleci.com/gh/standard-ai/spanner-deleter.svg?style=svg)](https://circleci.com/gh/standard-ai/spanner-deleter)
 
 ## Overview
 
-spanner-truncate is a tool to delete all rows from the tables in a Cloud Spanner database without deleting tables themselves.
+spanner-deleter is a tool to delete all rows from the tables in a Cloud Spanner database without deleting tables themselves.
 
 Please feel free to report issues and send pull requests, but note that this application is not officially supported as part of the Cloud Spanner product.
 
@@ -38,14 +38,14 @@ To solve the preceding issues, this tool works as follows.
 ## Install
 
 ```
-GO111MODULE=on go get github.com/cloudspannerecosystem/spanner-truncate
+GO111MODULE=on go get github.com/standard-ai/spanner-deleter
 ```
 
 ## How to use
 
 ```
 Usage:
-  spanner-truncate [OPTIONS]
+  spanner-deleter [OPTIONS]
 
 Application Options:
   -p, --project=  (required) GCP Project ID.
@@ -53,6 +53,12 @@ Application Options:
   -d, --database= (required) Cloud Spanner Database ID.
   -q, --quiet     Disable all interactive prompts.
   -t, --tables=   Comma separated table names to be truncated. Default to truncate all tables if not specified.
+  -o, --timeout=  Number of days the command should run before it times out, defaults to 1 day if not specified.
+  --priority=     Spanner priority, as described here https://pkg.go.dev/google.golang.org/genproto/googleapis/spanner/v1#RequestOptions_Priority . Recommended to be set to priority = 2 (RequestOptions_PRIORITY_MEDIUM). Defaults to High priority, which may overtake normal database operations
+  -c, --column=   Column used to perform equality, greater than, and less than filter
+  -l, --lower=    Lower bound comparison for column
+  -u, --upper=    Upper bound comparison for column
+  -v, --values=   Comma separated values for column to match on
 
 Help Options:
   -h, --help      Show this help message
@@ -61,7 +67,10 @@ Help Options:
 Example:
 
 ```
-$ spanner-truncate -p myproject -i myinstance -d mydb
+$ spanner-deleter --project=myproject --instance=myinstance --database=mydb --tables=Albums,Concerts,Singers,Songs --timeout=7 --priority=2 --column=label_id --values=first_label_id,second_label_id,third_label_id
+
+Running with priority 2
+Creating context with timeout 168h0m0s
 Fetching table information from projects/myproject/instances/myinstance/databases/mydb
 Albums
 Concerts
@@ -73,6 +82,11 @@ Concerts: completed    13s [============================================>] 100% 
 Singers:  completed    13s [============================================>] 100% (6,000 / 6,000)
 Albums:   completed    12s [============================================>] 100% (1,800 / 1,800)
 Songs:    completed    11s [============================================>] 100% (3,600 / 3,600)
+
+Executing: DELETE FROM `Concerts` WHERE label_id IN ('first_label_id','second_label_id','third_label_id')
+Executing: DELETE FROM `Singers` WHERE label_id IN ('first_label_id','second_label_id','third_label_id')
+Executing: DELETE FROM `Albums` WHERE label_id IN ('first_label_id','second_label_id','third_label_id')
+Executing: DELETE FROM `Songs` WHERE label_id IN ('first_label_id','second_label_id','third_label_id')
 
 Done! All rows have been deleted successfully.
 ```

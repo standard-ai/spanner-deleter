@@ -104,7 +104,7 @@ type coordinator struct {
 	errChan chan error
 }
 
-func newCoordinator(schemas []*tableSchema, client *spanner.Client) *coordinator {
+func newCoordinator(schemas []*tableSchema, client *spanner.Client, column string, columnValues []string, lower string, upper string, priority int32) *coordinator {
 	var tables []*table
 	tableMap := map[string]*table{}
 	for _, schema := range schemas {
@@ -113,8 +113,13 @@ func newCoordinator(schemas []*tableSchema, client *spanner.Client) *coordinator
 			parentTableName:      schema.parentTableName,
 			parentOnDeleteAction: schema.parentOnDeleteAction,
 			deleter: &deleter{
-				tableName: schema.tableName,
-				client:    client,
+				tableName:    schema.tableName,
+				client:       client,
+				column:       column,
+				columnValues: columnValues,
+				lower:        lower,
+				upper:        upper,
+				priority:     priority,
 			},
 			referencedBy: []*table{},
 		}

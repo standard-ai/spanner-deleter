@@ -19,9 +19,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/spanner"
+	spannerProto "google.golang.org/genproto/googleapis/spanner/v1"
 )
 
 // Status is a delete status.
@@ -37,9 +39,14 @@ const (
 
 // deleter deletes all rows from the table.
 type deleter struct {
-	tableName string
-	client    *spanner.Client
-	status    status
+	tableName    string
+	client       *spanner.Client
+	status       status
+	column       string
+	columnValues []string
+	lower        string
+	upper        string
+	priority     int32
 
 	// Total rows in the table.
 	// Once set, we don't update this number even if new rows are added to the table.
@@ -52,9 +59,35 @@ type deleter struct {
 // deleteRows deletes rows from the table using PDML.
 func (d *deleter) deleteRows(ctx context.Context) error {
 	d.status = statusDeleting
-	stmt := spanner.NewStatement(fmt.Sprintf("DELETE FROM `%s` WHERE true", d.tableName))
-	_, err := d.client.PartitionedUpdate(ctx, stmt)
+	stmt := spanner.NewStatement(d.getDeleteStatementString())
+	// low priority https://pkg.go.dev/google.golang.org/genproto/googleapis/spanner/v1#RequestOptions_Priority
+	options := spanner.QueryOptions{Priority: spannerProto.RequestOptions_Priority(d.priority)}
+	_, err := d.client.PartitionedUpdateWithOptions(ctx, stmt, options)
 	return err
+}
+
+func (d *deleter) getDeleteStatementString() string {
+	stmtStr := fmt.Sprintf("DELETE FROM `%s`", d.tableName)
+	stmtStr += d.getStatementStringSuffix()
+	return stmtStr
+}
+
+func (d *deleter) getStatementStringSuffix() string {
+	suffix := ""
+	if len(d.columnValues) > 0 {
+		suffix = fmt.Sprintf(" WHERE %s IN ('%s')", d.column, strings.Join(d.columnValues, "','"))
+		return suffix
+	}
+	hasLower := d.column != "" && d.lower != ""
+	hasUpper := d.column != "" && d.upper != ""
+	if hasLower && hasUpper {
+		suffix = fmt.Sprintf(" WHERE %s > '%s' AND %s < '%s'", d.column, d.lower, d.column, d.upper)
+	} else if hasLower {
+		suffix = fmt.Sprintf(" WHERE %s > '%s'", d.column, d.lower)
+	} else if hasUpper {
+		suffix = fmt.Sprintf(" WHERE %s < '%s'", d.column, d.upper)
+	}
+	return suffix
 }
 
 func (d *deleter) parentDeletionStarted() {
@@ -81,12 +114,14 @@ func (d *deleter) startRowCountUpdater(ctx context.Context) {
 }
 
 func (d *deleter) updateRowCount(ctx context.Context) error {
-	stmt := spanner.NewStatement(fmt.Sprintf("SELECT COUNT(*) as count FROM `%s`", d.tableName))
+	stmt := spanner.NewStatement(fmt.Sprintf("SELECT COUNT(*) as count FROM `%s` %s", d.tableName, d.getStatementStringSuffix()))
 	var count int64
 
 	// Use stale read to minimize the impact on the leader replica.
 	txn := d.client.Single().WithTimestampBound(spanner.ExactStaleness(time.Second))
-	if err := txn.Query(ctx, stmt).Do(func(r *spanner.Row) error {
+	// low priority https://pkg.go.dev/google.golang.org/genproto/googleapis/spanner/v1#RequestOptions_Priority
+	options := spanner.QueryOptions{Priority: spannerProto.RequestOptions_Priority(d.priority)}
+	if err := txn.QueryWithOptions(ctx, stmt, options).Do(func(r *spanner.Row) error {
 		return r.ColumnByName("count", &count)
 	}); err != nil {
 		return err

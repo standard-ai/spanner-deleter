@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 
-// spanner-truncate is a tool to delete all rows from the tables in a Cloud Spanner database without deleting tables themselves.
+// spanner-deleter is a tool to delete all rows from the tables in a Cloud Spanner database without deleting tables themselves.
 package main
 
 import (
@@ -38,14 +38,20 @@ type options struct {
 	DatabaseID string `short:"d" long:"database" description:"(required) Cloud Spanner Database ID."`
 	Quiet      bool   `short:"q" long:"quiet" description:"Disable all interactive prompts."`
 	Tables     string `short:"t" long:"tables" description:"Comma separated table names to be truncated. Default to truncate all tables if not specified."`
+	Column     string `short:"c" long:"column" description:"Column used to perform greater than and less than filter"`
+	Values     string `short:"v" long:"values" description:"Comma separated values for column to match on"`
+	Lower      string `short:"l" long:"lower" description:"Lower bound comparison"`
+	Upper      string `short:"u" long:"upper" description:"Upper bound comparison"`
+	Priority   int32  `long:"priority" description:"Priority [0,3] described here https://pkg.go.dev/google.golang.org/genproto/googleapis/spanner/v1#RequestOptions_Priority"`
+	Timeout    int    `short:"o" long:"timeout" description:"Timeout in days"`
 }
 
-const maxTimeout = time.Hour * 24
+const maxTimeout = time.Hour * 24 * 1
 
 func main() {
 	var opts options
 	if _, err := flags.Parse(&opts); err != nil {
-		exitf("Invalid options\n")
+		exitf("Invalid options: %s\n", err)
 	}
 
 	if opts.ProjectID == "" || opts.InstanceID == "" || opts.DatabaseID == "" {
@@ -57,16 +63,32 @@ func main() {
 		targetTables = strings.Split(opts.Tables, ",")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), maxTimeout)
+	var columnValues []string
+	if opts.Values != "" {
+		columnValues = strings.Split(opts.Values, ",")
+	}
+
+	timeout := maxTimeout
+	if opts.Timeout > 0 {
+		timeout = time.Hour * 24 * time.Duration(opts.Timeout)
+	}
+
+	if opts.Priority < 0 || opts.Priority > 3 {
+		exitf("ERROR: priority must be in [0, 3], see https://pkg.go.dev/google.golang.org/genproto/googleapis/spanner/v1#RequestOptions_Priority")
+	}
+	out := os.Stdout
+	fmt.Fprintf(out, "Running with priority %d\n", opts.Priority)
+	fmt.Fprintf(out, "Creating context with timeout %s\n", timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	go handleInterrupt(cancel)
 
-	if err := run(ctx, opts.ProjectID, opts.InstanceID, opts.DatabaseID, opts.Quiet, os.Stdout, targetTables); err != nil {
+	if err := run(ctx, opts.ProjectID, opts.InstanceID, opts.DatabaseID, opts.Quiet, out, targetTables, opts.Column, columnValues, opts.Lower, opts.Upper, opts.Priority); err != nil {
 		exitf("ERROR: %s", err.Error())
 	}
 }
 
-func run(ctx context.Context, projectID, instanceID, databaseID string, quiet bool, out io.Writer, targetTables []string) error {
+func run(ctx context.Context, projectID, instanceID, databaseID string, quiet bool, out io.Writer, targetTables []string, column string, columnValues []string, lower string, upper string, priority int32) error {
 	database := fmt.Sprintf("projects/%s/instances/%s/databases/%s", projectID, instanceID, databaseID)
 
 	client, err := spanner.NewClient(ctx, database)
@@ -91,7 +113,10 @@ func run(ctx context.Context, projectID, instanceID, databaseID string, quiet bo
 		fmt.Fprintf(out, "Rows in these tables will be deleted.\n")
 	}
 
-	coordinator := newCoordinator(schemas, client)
+	coordinator := newCoordinator(schemas, client, column, columnValues, lower, upper, priority)
+	for _, table := range coordinator.tables {
+		fmt.Fprintf(out, "Executing: %s\n", table.deleter.getDeleteStatementString())
+	}
 	coordinator.start(ctx)
 
 	// Show progress bars.

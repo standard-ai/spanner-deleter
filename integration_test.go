@@ -197,8 +197,21 @@ func TestIntegrationTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open /dev/null: %v", err)
 	}
-	if err := run(ctx, testProjectID, testInstanceID, testDatabaseID, true, devNull, nil); err != nil {
-		t.Fatalf("run spanner-truncate failed: %v", err)
+	if err := run(
+		ctx,
+		testProjectID,
+		testInstanceID,
+		testDatabaseID,
+		true,       // opts.Quiet
+		devNull,    // out
+		[]string{}, // targetTables
+		"",         // opts.Column
+		[]string{}, // columnValues
+		"",         // opts.Lower
+		"",         // opts.Upper
+		2,          // opts.Priority
+	); err != nil {
+		t.Fatalf("run spanner-deleter failed: %v", err)
 	}
 
 	for _, table := range []string{table1, table2, table3, table4} {
